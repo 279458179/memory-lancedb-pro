@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.1.0-beta.1 (Smart Memory Beta)
+
+This is a **beta** release published under the npm dist-tag **`beta`** (it will not affect the stable `latest` channel).
+
+Highlights:
+- **Smart Extraction (LLM-powered)**: 6-category extraction with L0/L1/L2 metadata (falls back to regex capture when disabled or init fails)
+- **Lifecycle scoring integrated into retrieval**: decay-based score adjustment + tier floors
+- **Tier transitions (best-effort)**: records access stats for top results and can promote/demote tiers via metadata
+- Rebases the smart-memory branch onto `main@1.0.25` (keeps multi-key rotation & other recent fixes)
+
+Notes:
+- Retrieval now performs small, bounded metadata write-backs for top results (access_count / last_accessed_at / tier).
+
+---
+
 
 ## 1.0.22
 
