@@ -24,6 +24,7 @@ import { ensureSelfImprovementLearningFiles } from "./src/self-improvement-files
 import type { MdMirrorWriter } from "./src/tools.js";
 import { shouldSkipRetrieval } from "./src/adaptive-retrieval.js";
 import { AccessTracker } from "./src/access-tracker.js";
+import { runWithReflectionTransientRetryOnce } from "./src/reflection-retry.js";
 import { createMemoryCLI } from "./cli.js";
 
 // ============================================================================
@@ -759,6 +760,7 @@ async function generateReflectionText(params: {
   timeoutMs: number;
   thinkLevel: ReflectionThinkLevel;
   toolErrorSignals?: ReflectionErrorSignal[];
+  logger?: { info?: (message: string) => void; warn?: (message: string) => void };
 }): Promise<{ text: string; usedFallback: boolean; promptHash: string; error?: string; runner: "embedded" | "cli" | "fallback" }> {
   const prompt = buildReflectionPrompt(
     params.conversation,
@@ -772,28 +774,41 @@ async function generateReflectionText(params: {
   );
   let reflectionText: string | null = null;
   const errors: string[] = [];
+  const retryState = { count: 0 };
+  const onRetryLog = (level: "info" | "warn", message: string) => {
+    if (level === "warn") params.logger?.warn?.(message);
+    else params.logger?.info?.(message);
+  };
 
   try {
-    const runEmbeddedPiAgent = await loadEmbeddedPiRunner();
-    const modelRef = resolveAgentPrimaryModelRef(params.cfg, params.agentId);
-    const { provider, model } = modelRef ? splitProviderModel(modelRef) : {};
+    const result: unknown = await runWithReflectionTransientRetryOnce({
+      scope: "reflection",
+      runner: "embedded",
+      retryState,
+      onLog: onRetryLog,
+      execute: async () => {
+        const runEmbeddedPiAgent = await loadEmbeddedPiRunner();
+        const modelRef = resolveAgentPrimaryModelRef(params.cfg, params.agentId);
+        const { provider, model } = modelRef ? splitProviderModel(modelRef) : {};
 
-    const result: unknown = await runEmbeddedPiAgent({
-      sessionId: `reflection-${Date.now()}`,
-      sessionKey: "temp:memory-reflection",
-      agentId: params.agentId,
-      sessionFile: tempSessionFile,
-      workspaceDir: params.workspaceDir,
-      config: params.cfg,
-      prompt,
-      disableTools: true,
-      disableMessageTool: true,
-      timeoutMs: params.timeoutMs,
-      runId: `memory-reflection-${Date.now()}`,
-      bootstrapContextMode: "lightweight",
-      thinkLevel: params.thinkLevel,
-      provider,
-      model,
+        return await runEmbeddedPiAgent({
+          sessionId: `reflection-${Date.now()}`,
+          sessionKey: "temp:memory-reflection",
+          agentId: params.agentId,
+          sessionFile: tempSessionFile,
+          workspaceDir: params.workspaceDir,
+          config: params.cfg,
+          prompt,
+          disableTools: true,
+          disableMessageTool: true,
+          timeoutMs: params.timeoutMs,
+          runId: `memory-reflection-${Date.now()}`,
+          bootstrapContextMode: "lightweight",
+          thinkLevel: params.thinkLevel,
+          provider,
+          model,
+        });
+      },
     });
 
     const payloads = (() => {
@@ -821,12 +836,18 @@ async function generateReflectionText(params: {
   }
 
   try {
-    reflectionText = await runReflectionViaCli({
-      prompt,
-      agentId: params.agentId,
-      workspaceDir: params.workspaceDir,
-      timeoutMs: params.timeoutMs,
-      thinkLevel: params.thinkLevel,
+    reflectionText = await runWithReflectionTransientRetryOnce({
+      scope: "reflection",
+      runner: "cli",
+      retryState,
+      onLog: onRetryLog,
+      execute: async () => await runReflectionViaCli({
+        prompt,
+        agentId: params.agentId,
+        workspaceDir: params.workspaceDir,
+        timeoutMs: params.timeoutMs,
+        thinkLevel: params.thinkLevel,
+      }),
     });
   } catch (err) {
     errors.push(`cli: ${err instanceof Error ? err.message : String(err)}`);
@@ -2002,6 +2023,7 @@ const memoryLanceDBProPlugin = {
             timeoutMs: reflectionTimeoutMs,
             thinkLevel: reflectionThinkLevel,
             toolErrorSignals,
+            logger: api.logger,
           });
           const reflectionText = reflectionGenerated.text;
           if (reflectionGenerated.runner === "cli") {
