@@ -564,7 +564,7 @@
     },
     "memoryReflection.storeToLanceDB": {
       "label": "Store Reflection To LanceDB",
-      "help": "Persist split reflection entries (Inherit/Derive) to LanceDB for inheritance/derived injection with legacy compatibility",
+      "help": "Persist one combined reflection entry per reflection event (invariants + derived)",
       "advanced": true
     },
     "memoryReflection.injectMode": {

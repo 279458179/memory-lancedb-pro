@@ -1,13 +1,13 @@
 import type { MemoryEntry, MemorySearchResult } from "./store.js";
 import { extractReflectionSlices, sanitizeReflectionSliceLines, type ReflectionSlices } from "./reflection-slices.js";
-import { getReflectionKind, parseReflectionMetadata } from "./reflection-metadata.js";
+import { parseReflectionMetadata } from "./reflection-metadata.js";
 
 export const REFLECTION_DERIVE_LOGISTIC_MIDPOINT_DAYS = 3;
 export const REFLECTION_DERIVE_LOGISTIC_K = 1.2;
 export const REFLECTION_DERIVE_FALLBACK_BASE_WEIGHT = 0.35;
 export const DEFAULT_REFLECTION_DERIVED_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
 
-type ReflectionStoreKind = "inherit" | "derive";
+type ReflectionStoreKind = "combined";
 
 type ReflectionErrorSignalLike = {
   signatureHash: string;
@@ -36,74 +36,48 @@ export function buildReflectionStorePayloads(params: BuildReflectionStorePayload
   payloads: ReflectionStorePayload[];
 } {
   const slices = extractReflectionSlices(params.reflectionText);
+  if (slices.invariants.length === 0 && slices.derived.length === 0) {
+    return { slices, payloads: [] };
+  }
+
   const dateYmd = new Date(params.runAt).toISOString().split("T")[0];
-  const payloads: ReflectionStorePayload[] = [];
-
-  if (slices.invariants.length > 0) {
-    payloads.push({
-      kind: "inherit",
-      text: [
-        `reflection:Inherit · ${params.scope} · ${dateYmd}`,
-        `Session Reflection Inherit (${new Date(params.runAt).toISOString()})`,
-        `Session Key: ${params.sessionKey}`,
-        `Session ID: ${params.sessionId}`,
-        "",
-        "Invariants:",
-        ...slices.invariants.map((x) => `- ${x}`),
-      ].join("\n"),
-      metadata: {
-        type: "memory-reflection",
-        stage: "reflect-store",
-        reflectionKind: "inherit",
-        reflectionVersion: 2,
-        sessionKey: params.sessionKey,
-        sessionId: params.sessionId,
-        agentId: params.agentId,
-        command: params.command,
-        storedAt: params.runAt,
-        invariants: slices.invariants,
-        usedFallback: params.usedFallback,
-        errorSignals: params.toolErrorSignals.map((s) => s.signatureHash),
-      },
-    });
-  }
-
-  if (slices.derived.length > 0) {
-    const deriveQuality = computeDerivedLineQuality(slices.derived.length);
-    const deriveBaseWeight = params.usedFallback ? REFLECTION_DERIVE_FALLBACK_BASE_WEIGHT : 1;
-    payloads.push({
-      kind: "derive",
-      text: [
-        `reflection:Derive · ${params.scope} · ${dateYmd}`,
-        `Session Reflection Derive (${new Date(params.runAt).toISOString()})`,
-        `Session Key: ${params.sessionKey}`,
-        `Session ID: ${params.sessionId}`,
-        "",
-        "Derived:",
-        ...slices.derived.map((x) => `- ${x}`),
-      ].join("\n"),
-      metadata: {
-        type: "memory-reflection",
-        stage: "reflect-store",
-        reflectionKind: "derive",
-        reflectionVersion: 2,
-        sessionKey: params.sessionKey,
-        sessionId: params.sessionId,
-        agentId: params.agentId,
-        command: params.command,
-        storedAt: params.runAt,
-        derived: slices.derived,
-        usedFallback: params.usedFallback,
-        errorSignals: params.toolErrorSignals.map((s) => s.signatureHash),
-        decayModel: "logistic",
-        decayMidpointDays: REFLECTION_DERIVE_LOGISTIC_MIDPOINT_DAYS,
-        decayK: REFLECTION_DERIVE_LOGISTIC_K,
-        deriveBaseWeight,
-        deriveQuality,
-        deriveSource: params.usedFallback ? "fallback" : "normal",
-      },
-    });
-  }
+  const deriveQuality = computeDerivedLineQuality(slices.derived.length);
+  const deriveBaseWeight = params.usedFallback ? REFLECTION_DERIVE_FALLBACK_BASE_WEIGHT : 1;
+  const payloads: ReflectionStorePayload[] = [{
+    kind: "combined",
+    text: [
+      `reflection · ${params.scope} · ${dateYmd}`,
+      `Session Reflection (${new Date(params.runAt).toISOString()})`,
+      `Session Key: ${params.sessionKey}`,
+      `Session ID: ${params.sessionId}`,
+      "",
+      "Invariants:",
+      ...(slices.invariants.length > 0 ? slices.invariants.map((x) => `- ${x}`) : ["- (none captured)"]),
+      "",
+      "Derived:",
+      ...(slices.derived.length > 0 ? slices.derived.map((x) => `- ${x}`) : ["- (none captured)"]),
+    ].join("\n"),
+    metadata: {
+      type: "memory-reflection",
+      stage: "reflect-store",
+      reflectionVersion: 3,
+      sessionKey: params.sessionKey,
+      sessionId: params.sessionId,
+      agentId: params.agentId,
+      command: params.command,
+      storedAt: params.runAt,
+      invariants: slices.invariants,
+      derived: slices.derived,
+      usedFallback: params.usedFallback,
+      errorSignals: params.toolErrorSignals.map((s) => s.signatureHash),
+      decayModel: "logistic",
+      decayMidpointDays: REFLECTION_DERIVE_LOGISTIC_MIDPOINT_DAYS,
+      decayK: REFLECTION_DERIVE_LOGISTIC_K,
+      deriveBaseWeight,
+      deriveQuality,
+      deriveSource: params.usedFallback ? "fallback" : "normal",
+    },
+  }];
 
   return { slices, payloads };
 }
@@ -182,8 +156,6 @@ export function loadAgentReflectionSlicesFromEntries(params: LoadReflectionSlice
 
   const invariants: string[] = [];
   for (const { metadata } of reflections) {
-    const kind = getReflectionKind(metadata);
-    if (kind === "derive") continue;
     const inv = sanitizeReflectionSliceLines(toStringArray(metadata.invariants));
     for (const item of inv) {
       if (!item || invariants.includes(item)) continue;
@@ -197,9 +169,6 @@ export function loadAgentReflectionSlicesFromEntries(params: LoadReflectionSlice
   const lineScores = new Map<string, WeightedLine>();
 
   for (const { entry, metadata } of reflections) {
-    const kind = getReflectionKind(metadata);
-    if (kind === "inherit") continue;
-
     const derivedLines = sanitizeReflectionSliceLines(toStringArray(metadata.derived));
     if (derivedLines.length === 0) continue;
 

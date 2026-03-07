@@ -194,18 +194,16 @@ Filters out low-quality content at both auto-capture and tool-store stages:
   - Filename uses high-resolution timestamp + agent/session token (with conflict-safe suffix), for example `HHMMSSmmm-agent-session[-xxxxxx].md`.
 - Store to LanceDB (optional):
   - Controlled by `memoryReflection.storeToLanceDB` (effective only under `sessionStrategy=memoryReflection`).
-  - Reflection persistence is split into two category=`reflection` entries:
-    - Inherit entry (`metadata.reflectionKind = "inherit"`, display tag `reflection:Inherit`)
-    - Derive entry (`metadata.reflectionKind = "derive"`, display tag `reflection:Derive`)
-  - Legacy combined reflection rows (only `metadata.invariants[]` + `metadata.derived[]`, without `reflectionKind`) remain readable/injectable with a safe legacy display path (`reflection:<scope>`).
-  - Additional similarity dedupe is applied per split entry before write (`> 0.97` hit skips storing that entry).
-  - New metadata fields explicitly include subtype and decay semantics: `reflectionKind`, `reflectionVersion`, `storedAt`, `invariants[]` or `derived[]`, and for derive entries `decayModel`, `decayMidpointDays`, `decayK`, `deriveBaseWeight`, `deriveQuality`, `deriveSource`.
+  - Reflection persistence writes one combined category=`reflection` entry per reflection event.
+  - The combined metadata contains both `invariants[]` and `derived[]`, plus derive decay semantics (`decayModel`, `decayMidpointDays`, `decayK`, `deriveBaseWeight`, `deriveQuality`, `deriveSource`).
+  - Additional similarity dedupe is applied once per combined write (`> 0.97` hit skips storing that event).
+  - Reflection display tags use `reflection:<scope>`.
 - Dedicated agent (optional): run reflection generation with another agent via `memoryReflection.agentId` (e.g. `memory-distiller`)
   - If configured `memoryReflection.agentId` is not found in `cfg.agents.list`, plugin logs a clear warning and falls back to runtime agent id.
   - For embedded runs, the plugin resolves the target agent's primary model ref (`provider/model`) and passes `provider` + `model` explicitly.
-- Inherit: `before_agent_start` injects `<inherited-rules>` from Inherit memories (`reflectionKind=inherit`) plus legacy `invariants[]` compatibility rows.
-- Derive: `before_prompt_build` injects `<derived-focus>` and `<error-detected>` blocks.
-  - `<derived-focus>` is sourced only from Derive memories (`reflectionKind=derive`) plus legacy `derived[]` compatibility rows.
+- Invariant slice injection: `before_agent_start` injects `<inherited-rules>` from reflection memories that carry `invariants[]`.
+- Derived slice injection: `before_prompt_build` injects `<derived-focus>` and `<error-detected>` blocks.
+  - `<derived-focus>` is sourced from reflection memories that carry `derived[]`.
   - Multiple recent derive memories are weighted with logistic decay during reflection loading/injection (not in global retriever scoring):
     - `weight = 1 / (1 + exp(k * (ageDays - midpointDays)))`
     - defaults: `midpointDays = 3`, `k = 1.2`

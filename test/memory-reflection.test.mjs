@@ -117,27 +117,7 @@ describe("memory reflection", () => {
   });
 
   describe("display category tags", () => {
-    it("shows subtype labels for new reflection entries", () => {
-      assert.equal(
-        getDisplayCategoryTag({
-          category: "reflection",
-          scope: "global",
-          metadata: JSON.stringify({ type: "memory-reflection", reflectionKind: "inherit" }),
-        }),
-        "reflection:Inherit"
-      );
-
-      assert.equal(
-        getDisplayCategoryTag({
-          category: "reflection",
-          scope: "global",
-          metadata: JSON.stringify({ type: "memory-reflection", reflectionKind: "derive" }),
-        }),
-        "reflection:Derive"
-      );
-    });
-
-    it("keeps legacy-safe reflection display path when subtype metadata is absent", () => {
+    it("uses scope tag for reflection entries", () => {
       assert.equal(
         getDisplayCategoryTag({
           category: "reflection",
@@ -145,6 +125,37 @@ describe("memory reflection", () => {
           metadata: JSON.stringify({ type: "memory-reflection", invariants: ["Always verify output"] }),
         }),
         "reflection:project-a"
+      );
+
+      assert.equal(
+        getDisplayCategoryTag({
+          category: "reflection",
+          scope: "project-b",
+          metadata: JSON.stringify({
+            type: "memory-reflection",
+            reflectionVersion: 3,
+            invariants: ["Always verify output"],
+            derived: ["Next run keep prompts short."],
+          }),
+        }),
+        "reflection:project-b"
+      );
+    });
+
+    it("uses scope tag for reflection rows with optional metadata fields", () => {
+      assert.equal(
+        getDisplayCategoryTag({
+          category: "reflection",
+          scope: "global",
+          metadata: JSON.stringify({
+            type: "memory-reflection",
+            reflectionVersion: 3,
+            invariants: ["Always keep steps auditable."],
+            derived: ["Next run keep verification concise."],
+            deriveBaseWeight: 0.35,
+          }),
+        }),
+        "reflection:global"
       );
     });
 
@@ -305,8 +316,8 @@ describe("memory reflection", () => {
     });
   });
 
-  describe("split persistence", () => {
-    it("stores split inherit/derive entries with subtype metadata and logistic fields", async () => {
+  describe("single-entry persistence", () => {
+    it("stores one combined reflection entry with invariant+derived slices and derive decay metadata", async () => {
       const storedEntries = [];
       const vectorSearchCalls = [];
 
@@ -315,7 +326,7 @@ describe("memory reflection", () => {
           "## Invariants",
           "- Always confirm assumptions before changing files.",
           "## Derived",
-          "- Next run verify reflection split with targeted tests.",
+          "- Next run verify reflection persistence with targeted tests.",
         ].join("\n"),
         sessionKey: "agent:main:session:abc",
         sessionId: "abc",
@@ -337,34 +348,26 @@ describe("memory reflection", () => {
       });
 
       assert.equal(result.stored, true);
-      assert.deepEqual(new Set(result.storedKinds), new Set(["inherit", "derive"]));
-      assert.equal(storedEntries.length, 2);
-      assert.equal(vectorSearchCalls.length, 2);
+      assert.deepEqual(result.storedKinds, ["combined"]);
+      assert.equal(storedEntries.length, 1);
+      assert.equal(vectorSearchCalls.length, 1);
 
-      const inherit = storedEntries.find((entry) => JSON.parse(entry.metadata).reflectionKind === "inherit");
-      const derive = storedEntries.find((entry) => JSON.parse(entry.metadata).reflectionKind === "derive");
-      assert.ok(inherit);
-      assert.ok(derive);
+      const stored = storedEntries[0];
+      const meta = JSON.parse(stored.metadata);
 
-      const inheritMeta = JSON.parse(inherit.metadata);
-      const deriveMeta = JSON.parse(derive.metadata);
-
-      assert.equal(inherit.category, "reflection");
-      assert.equal(derive.category, "reflection");
-      assert.deepEqual(inheritMeta.invariants, ["Always confirm assumptions before changing files."]);
-      assert.equal(inheritMeta.reflectionKind, "inherit");
-
-      assert.equal(deriveMeta.reflectionKind, "derive");
-      assert.deepEqual(deriveMeta.derived, ["Next run verify reflection split with targeted tests."]);
-      assert.equal(deriveMeta.decayModel, "logistic");
-      assert.equal(deriveMeta.decayK, REFLECTION_DERIVE_LOGISTIC_K);
-      assert.equal(deriveMeta.decayMidpointDays, REFLECTION_DERIVE_LOGISTIC_MIDPOINT_DAYS);
-      assert.equal(deriveMeta.deriveBaseWeight, 1);
+      assert.equal(stored.category, "reflection");
+      assert.equal(meta.reflectionVersion, 3);
+      assert.deepEqual(meta.invariants, ["Always confirm assumptions before changing files."]);
+      assert.deepEqual(meta.derived, ["Next run verify reflection persistence with targeted tests."]);
+      assert.equal(meta.decayModel, "logistic");
+      assert.equal(meta.decayK, REFLECTION_DERIVE_LOGISTIC_K);
+      assert.equal(meta.decayMidpointDays, REFLECTION_DERIVE_LOGISTIC_MIDPOINT_DAYS);
+      assert.equal(meta.deriveBaseWeight, 1);
     });
   });
 
-  describe("legacy compatibility + source separation", () => {
-    it("loads legacy combined entries and separates inherit/derive sources", () => {
+  describe("reflection slice loading", () => {
+    it("loads combined entries from both older and current metadata layouts", () => {
       const now = Date.UTC(2026, 2, 7);
 
       const entries = [
@@ -373,9 +376,8 @@ describe("memory reflection", () => {
           metadata: {
             type: "memory-reflection",
             agentId: "main",
-            reflectionKind: "inherit",
-            invariants: ["Always keep fixes minimal."],
-            derived: ["should-not-appear-from-inherit"],
+            invariants: ["Legacy invariant still applies."],
+            derived: ["Legacy derived delta still applies."],
             storedAt: now - 30 * 60 * 1000,
           },
         }),
@@ -384,20 +386,13 @@ describe("memory reflection", () => {
           metadata: {
             type: "memory-reflection",
             agentId: "main",
-            reflectionKind: "derive",
-            invariants: ["should-not-appear-from-derive"],
-            derived: ["Next run keep logs concise."],
+            reflectionVersion: 3,
+            invariants: ["Current invariant applies too."],
+            derived: ["Current derived delta still applies."],
             storedAt: now - 25 * 60 * 1000,
-          },
-        }),
-        makeEntry({
-          timestamp: now - 20 * 60 * 1000,
-          metadata: {
-            type: "memory-reflection",
-            agentId: "main",
-            invariants: ["Legacy invariant still applies."],
-            derived: ["Legacy derived delta still applies."],
-            storedAt: now - 20 * 60 * 1000,
+            decayModel: "logistic",
+            decayMidpointDays: REFLECTION_DERIVE_LOGISTIC_MIDPOINT_DAYS,
+            decayK: REFLECTION_DERIVE_LOGISTIC_K,
           },
         }),
       ];
@@ -409,18 +404,16 @@ describe("memory reflection", () => {
         deriveMaxAgeMs: 7 * 24 * 60 * 60 * 1000,
       });
 
-      assert.ok(slices.invariants.includes("Always keep fixes minimal."));
       assert.ok(slices.invariants.includes("Legacy invariant still applies."));
-      assert.ok(!slices.invariants.includes("should-not-appear-from-derive"));
+      assert.ok(slices.invariants.includes("Current invariant applies too."));
 
-      assert.ok(slices.derived.includes("Next run keep logs concise."));
       assert.ok(slices.derived.includes("Legacy derived delta still applies."));
-      assert.ok(!slices.derived.includes("should-not-appear-from-inherit"));
+      assert.ok(slices.derived.includes("Current derived delta still applies."));
     });
   });
 
   describe("derive logistic scoring", () => {
-    it("aggregates multiple recent derive memories and down-weights fallback entries", () => {
+    it("ranks recent derived guidance using logistic decay and fallback base-weight", () => {
       const now = Date.UTC(2026, 2, 7);
       const day = 24 * 60 * 60 * 1000;
 
@@ -430,11 +423,11 @@ describe("memory reflection", () => {
           metadata: {
             type: "memory-reflection",
             agentId: "main",
-            reflectionKind: "derive",
             derived: ["Fresh normal derive"],
             storedAt: now - 1 * day,
             deriveBaseWeight: 1,
             usedFallback: false,
+            reflectionVersion: 3,
           },
         }),
         makeEntry({
@@ -442,10 +435,10 @@ describe("memory reflection", () => {
           metadata: {
             type: "memory-reflection",
             agentId: "main",
-            reflectionKind: "derive",
             derived: ["Fresh fallback derive"],
             storedAt: now - 1 * day,
             usedFallback: true,
+            reflectionVersion: 3,
           },
         }),
         makeEntry({
@@ -453,10 +446,10 @@ describe("memory reflection", () => {
           metadata: {
             type: "memory-reflection",
             agentId: "main",
-            reflectionKind: "derive",
             derived: ["Older normal derive"],
             storedAt: now - 5 * day,
             usedFallback: false,
+            reflectionVersion: 3,
           },
         }),
         makeEntry({
@@ -464,7 +457,6 @@ describe("memory reflection", () => {
           metadata: {
             type: "memory-reflection",
             agentId: "main",
-            reflectionKind: "derive",
             derived: ["Second recent derive signal"],
             storedAt: now - 2 * day,
             usedFallback: false,
