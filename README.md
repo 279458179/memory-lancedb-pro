@@ -16,9 +16,126 @@ Hybrid Retrieval (Vector + BM25) · Cross-Encoder Rerank · Multi-Scope Isolatio
 
 ---
 
+## Start Here
+
+If you are new to OpenClaw and just want the plugin to work well, use this order:
+
+1. Install the beta build.
+2. Copy the recommended config below.
+3. Validate config and restart the gateway.
+4. Only then read the deeper architecture / migration / distillation sections.
+
+Useful deep-dive docs:
+
+- [OpenClaw integration playbook](docs/openclaw-integration-playbook.md)
+- [Memory architecture analysis](docs/memory_architecture_analysis.md)
+
+## Best Experience Config for New OpenClaw Users
+
+This is the recommended starting point if you want good recall + good auto-capture quality without turning on every advanced feature:
+
+- `autoCapture: true`
+- `autoRecall: true`
+- `smartExtraction: true`
+- `extractMinMessages: 2`
+- `sessionMemory.enabled: false`
+- `captureAssistant: false`
+
+Reasoning:
+
+- `extractMinMessages: 2` makes smart extraction trigger in normal two-turn conversations.
+- `autoRecall: true` gives you the main benefit of long-term memory immediately.
+- `sessionMemory.enabled: false` avoids polluting retrieval with session summaries on day one.
+- `captureAssistant: false` keeps auto-capture conservative until you know you need assistant-side context.
+
+### 30-Second Quick Start
+
+Install:
+
+```bash
+npm i memory-lancedb-pro@beta
+```
+
+Recommended OpenClaw config:
+
+```json
+{
+  "plugins": {
+    "slots": {
+      "memory": "memory-lancedb-pro"
+    },
+    "entries": {
+      "memory-lancedb-pro": {
+        "enabled": true,
+        "config": {
+          "embedding": {
+            "provider": "openai-compatible",
+            "apiKey": "${OPENAI_API_KEY}",
+            "model": "text-embedding-3-small"
+          },
+          "autoCapture": true,
+          "autoRecall": true,
+          "smartExtraction": true,
+          "extractMinMessages": 2,
+          "extractMaxChars": 8000,
+          "sessionMemory": {
+            "enabled": false
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Validate and restart:
+
+```bash
+openclaw config validate
+openclaw gateway restart
+openclaw logs --follow --plain | rg "memory-lancedb-pro"
+```
+
+You should see logs like:
+
+- `memory-lancedb-pro: smart extraction enabled`
+- `memory-lancedb-pro@...: plugin registered`
+
+If your model tends to echo injected memory blocks too aggressively, change only one thing first:
+
+```json
+{
+  "autoRecall": false
+}
+```
+
+## What This README Is For
+
+Use this README for:
+
+- installation
+- recommended OpenClaw config
+- config reference
+- migration / upgrade / rollback
+- CLI / tools / troubleshooting
+
+If you only want the shortest path, stop after the quick start section above.
+
+## Why This Memory Architecture Works Well in OpenClaw
+
+This plugin makes your agent remember useful things across chats without forcing you to manually manage memory all day.
+
+- **It can remember from normal conversation**: when you chat with the agent, it can save stable preferences, facts, and decisions instead of relying only on manual `memory_store` calls.
+- **It can bring relevant memory back before the next reply**: with `autoRecall`, OpenClaw can inject the most relevant past memories into the agent context, so the agent feels more consistent across sessions.
+- **Auto memory and manual memory stay in one place**: chat capture, agent tools, CLI search, migration, and upgrades all use the same LanceDB store, so you do not end up with several disconnected memory systems.
+- **It fits how OpenClaw already works**: OpenClaw keeps full session transcripts as JSONL, and this plugin focuses on extracting durable memory instead of blindly treating every session log as long-term memory.
+- **It is built for real operations, not just demos**: backup, deduplication, scoped access, lifecycle ranking, upgrade paths, and troubleshooting tools are already part of the same system.
+
+For the detailed architecture, see [docs/memory_architecture_analysis.md](docs/memory_architecture_analysis.md).
+
 ## 📺 Video Tutorial
 
-> **Watch the full walkthrough — covers installation, configuration, and how hybrid retrieval works under the hood.**
+> Full walkthrough: installation, configuration, and hybrid retrieval internals.
 
 [![YouTube Video](https://img.shields.io/badge/YouTube-Watch%20Now-red?style=for-the-badge&logo=youtube)](https://youtu.be/MtukF1C8epQ)
 🔗 **https://youtu.be/MtukF1C8epQ**
@@ -57,11 +174,9 @@ The built-in `memory-lancedb` plugin in OpenClaw provides basic vector search. *
 
 ## 🧪 Beta: Smart Memory v1.1.0
 
-> **Status**: Beta — available on npm under the `beta` dist-tag. Stable users on `latest` are not affected.
+> Status: Beta — available on npm under the `beta` dist-tag. Stable users on `latest` are not affected.
 
 The `dev/smart-memory-v1.1.0` branch introduces three major enhancements to the memory write & retrieval pipeline:
-
-### What's New
 
 | Feature | Description |
 |---------|-------------|
@@ -69,65 +184,10 @@ The `dev/smart-memory-v1.1.0` branch introduces three major enhancements to the 
 | **Lifecycle Scoring** | Weibull decay model integrated into retrieval — scores are adjusted by `max(tierFloor, decayComposite)` so frequently-accessed and high-importance memories rank higher. |
 | **Tier Management** | Three-tier system (Core → Working → Peripheral) with automatic promotion/demotion based on access frequency, composite score, and importance. |
 
-### Install the Beta
+Beta feedback:
 
-```bash
-npm i memory-lancedb-pro@beta
-```
-
-Or pin the exact version:
-
-```bash
-npm i memory-lancedb-pro@1.1.0-beta.1
-```
-
-### Configuration
-
-Smart extraction is **enabled by default**. It reuses your existing embedding API key for LLM calls (or you can configure a separate LLM endpoint):
-
-```json
-{
-  "plugins.entries.memory-lancedb-pro": {
-    "config": {
-      "smartExtraction": true,
-      "llm": {
-        "apiKey": "${OPENAI_API_KEY}",
-        "model": "gpt-4o-mini",
-        "baseURL": "https://api.openai.com/v1"
-      },
-      "extractMinMessages": 4,
-      "extractMaxChars": 8000
-    }
-  }
-}
-```
-
-| Config Key | Default | Description |
-|------------|---------|-------------|
-| `smartExtraction` | `true` | Enable/disable LLM-powered extraction |
-| `llm.apiKey` | *(embedding apiKey)* | API key for extraction LLM |
-| `llm.model` | `gpt-4o-mini` | LLM model for extraction & dedup |
-| `llm.baseURL` | *(embedding baseURL)* | Base URL for LLM API |
-| `extractMinMessages` | `4` | Min conversation messages before extraction triggers |
-| `extractMaxChars` | `8000` | Max conversation chars to process |
-
-### New Files
-
-| File | Purpose |
-|------|---------|
-| `src/smart-extractor.ts` | LLM extraction pipeline: conversation → extract → dedup → persist |
-| `src/extraction-prompts.ts` | Prompt templates for extraction, dedup, and merge |
-| `src/llm-client.ts` | OpenAI-compatible LLM client with JSON parsing |
-| `src/memory-categories.ts` | 6-category classification system + merge strategies |
-| `src/decay-engine.ts` | Weibull stretched-exponential decay with tier-specific beta |
-| `src/tier-manager.ts` | Three-tier promotion/demotion lifecycle manager |
-
-### Feedback
-
-This is a beta release — please report issues or share feedback at:
 - [GitHub Issues](https://github.com/win4r/memory-lancedb-pro/issues)
-
-To revert to stable: `npm i memory-lancedb-pro@latest`
+- Revert to stable with `npm i memory-lancedb-pro@latest`
 
 ---
 
@@ -274,11 +334,13 @@ See `docs/openclaw-integration-playbook.md` for deployment modes, `/new` verific
 - **LLM or No-LLM Mode**: Use LLM for high-quality enrichment, or simple text truncation for offline use
 - **Startup Detection**: Plugin automatically detects legacy memories and logs upgrade suggestion
 
-### Prevent memories from showing up in replies
+### If injected memories show up in replies
 
 Sometimes the model may accidentally echo the injected `<relevant-memories>` block in its response.
 
-**Option A (recommended): disable auto-recall**
+If you are following the "best experience" config above, do not turn off `autoRecall` by default. Use one of these mitigations only if your model actually starts leaking injected memory blocks.
+
+**Option A (lowest-risk fallback): temporarily disable auto-recall**
 
 Set `autoRecall: false` in the plugin config and restart the gateway:
 
@@ -297,7 +359,7 @@ Set `autoRecall: false` in the plugin config and restart the gateway:
 }
 ```
 
-**Option B: keep recall, but ask the agent not to reveal it**
+**Option B (preferred if recall quality matters): keep recall, but ask the agent not to reveal it**
 
 Add a line to your agent system prompt, e.g.:
 
@@ -333,7 +395,8 @@ Pick the path that matches your current state. Do not mix `migrate`, `upgrade`, 
 #### Path A — New to OpenClaw or setting up memory for the first time
 
 1. Install the plugin and bind `plugins.slots.memory` to `memory-lancedb-pro`
-2. Start with a minimal config (`embedding` + optional `smartExtraction`)
+2. Start with the "Best Experience Config for New OpenClaw Users" above
+   - Use the minimal config only if you are debugging installation or isolating retrieval problems
 3. Run:
 
 ```bash
@@ -549,7 +612,7 @@ openclaw config get plugins.slots.memory
   },
   "dbPath": "~/.openclaw/memory/lancedb-pro",
   "autoCapture": true,
-  "autoRecall": false,
+  "autoRecall": true,
   "retrieval": {
     "mode": "hybrid",
     "vectorWeight": 0.7,
@@ -591,7 +654,7 @@ openclaw config get plugins.slots.memory
     "model": "openai/gpt-oss-120b",
     "baseURL": "https://api.openai.com/v1"
   },
-  "extractMinMessages": 4,
+  "extractMinMessages": 2,
   "extractMaxChars": 8000
 }
 ```
@@ -599,6 +662,7 @@ openclaw config get plugins.slots.memory
 OpenClaw-specific defaults:
 
 - `autoCapture`: enabled by default
+- `autoRecall`: disabled by default in the plugin schema, but for most new OpenClaw users this README recommends turning it on after basic install succeeds
 - `embedding.chunking`: enabled by default and now wired through to the embedder runtime
 - `sessionMemory.enabled`: disabled by default; set it explicitly to `true` if you want the plugin to register the `/new` session-summary hook
 
@@ -703,7 +767,7 @@ When `smartExtraction` is enabled (default: `true`), the plugin uses an LLM to i
 | `llm.apiKey` | string | *(falls back to `embedding.apiKey`)* | API key for the LLM provider |
 | `llm.model` | string | `openai/gpt-oss-120b` | LLM model name |
 | `llm.baseURL` | string | *(falls back to `embedding.baseURL`)* | LLM API endpoint |
-| `extractMinMessages` | number | `4` | Minimum messages in a conversation before extraction triggers |
+| `extractMinMessages` | number | `2` | Minimum messages in a conversation before extraction triggers |
 | `extractMaxChars` | number | `8000` | Maximum characters sent to the LLM for extraction |
 
 <details>
@@ -736,7 +800,7 @@ When `smartExtraction` is enabled (default: `true`), the plugin uses an LLM to i
     "model": "openai/gpt-oss-120b",
     "baseURL": "https://api.openai.com/v1"
   },
-  "extractMinMessages": 4,
+  "extractMinMessages": 2,
   "extractMaxChars": 8000
 }
 ```

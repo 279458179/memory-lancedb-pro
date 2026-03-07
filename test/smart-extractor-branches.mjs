@@ -65,7 +65,7 @@ function createMockApi(dbPath, embeddingBaseURL, llmBaseURL, logs) {
       autoCapture: true,
       autoRecall: false,
       smartExtraction: true,
-      extractMinMessages: 4,
+      extractMinMessages: 2,
       embedding: {
         apiKey: "dummy",
         model: "qwen3-embedding-4b",

@@ -153,6 +153,7 @@ graph TD
 按当前实现，关键默认行为如下：
 
 - `smartExtraction`: 默认开启
+- `extractMinMessages`: 默认 `2`
 - `autoCapture`: 默认开启
 - `autoRecall`: 默认关闭
 - `captureAssistant`: 默认关闭
@@ -194,21 +195,23 @@ graph TD
 `agent_end` 的执行顺序是：
 
 ```text
-抽取 user/assistant 文本
+抽取文本（默认仅 `user`；当 `captureAssistant === true` 时也包含 `assistant`）
   -> 若 smartExtractor 可用且消息数达阈值:
        SmartExtractor.extractAndPersist()
-       成功后直接 return
-  -> 否则走 shouldCapture() + detectCategory() + regex fallback
+       若 created > 0 或 merged > 0，则直接 return
+       否则继续走 regex fallback
+  -> shouldCapture() + detectCategory() + regex fallback
   -> buildSmartMetadata()
   -> store.store()
 ```
 
 几个关键点：
 
-- 智能提取命中时，会直接接管整个自动捕获路径
+- 智能提取只有在产出持久化结果时，才会接管整个自动捕获路径
 - regex fallback 仍存在，但已经不再输出“半旧格式数据”
 - fallback 写入前仍做噪声过滤与重复检查
 - 每轮对话最多写入 3 条 fallback memory
+- 在 OpenClaw 实际运行中，`agent_end.event.messages` 的粒度取决于上游 Hook payload；当前插件不会主动回读会话历史，而是直接消费该事件携带的消息数组
 
 ### 4.3 SmartExtractor 主链
 

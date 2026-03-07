@@ -100,7 +100,7 @@
         "type": "integer",
         "minimum": 1,
         "maximum": 100,
-        "default": 4,
+        "default": 2,
         "description": "Minimum conversation messages required before smart extraction runs."
       },
       "extractMaxChars": {

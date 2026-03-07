@@ -162,6 +162,49 @@ function resolveHookAgentId(
   return explicitAgentId || parseAgentIdFromSessionKey(sessionKey) || "main";
 }
 
+function summarizeAgentEndMessages(messages: unknown[]): string {
+  const roleCounts = new Map<string, number>();
+  let textBlocks = 0;
+  let stringContents = 0;
+  let arrayContents = 0;
+
+  for (const msg of messages) {
+    if (!msg || typeof msg !== "object") continue;
+    const msgObj = msg as Record<string, unknown>;
+    const role =
+      typeof msgObj.role === "string" && msgObj.role.trim().length > 0
+        ? msgObj.role
+        : "unknown";
+    roleCounts.set(role, (roleCounts.get(role) ?? 0) + 1);
+
+    const content = msgObj.content;
+    if (typeof content === "string") {
+      stringContents++;
+      continue;
+    }
+    if (Array.isArray(content)) {
+      arrayContents++;
+      for (const block of content) {
+        if (
+          block &&
+          typeof block === "object" &&
+          (block as Record<string, unknown>).type === "text" &&
+          typeof (block as Record<string, unknown>).text === "string"
+        ) {
+          textBlocks++;
+        }
+      }
+    }
+  }
+
+  const roles =
+    Array.from(roleCounts.entries())
+      .map(([role, count]) => `${role}:${count}`)
+      .join(", ") || "none";
+
+  return `messages=${messages.length}, roles=[${roles}], stringContents=${stringContents}, arrayContents=${arrayContents}, textBlocks=${textBlocks}`;
+}
+
 // ============================================================================
 // Capture & Category Detection (from old plugin)
 // ============================================================================
@@ -501,7 +544,7 @@ const memoryLanceDBProPlugin = {
 
         smartExtractor = new SmartExtractor(store, embedder, llmClient, {
           user: "User",
-          extractMinMessages: config.extractMinMessages ?? 4,
+          extractMinMessages: config.extractMinMessages ?? 2,
           extractMaxChars: config.extractMaxChars ?? 8000,
           defaultScope: config.scopes?.default ?? "global",
           log: (msg: string) => api.logger.info(msg),
@@ -743,6 +786,11 @@ const memoryLanceDBProPlugin = {
           const agentId = resolveHookAgentId(ctx?.agentId, (event as any).sessionKey);
           const accessibleScopes = scopeManager.getAccessibleScopes(agentId);
           const defaultScope = scopeManager.getDefaultScope(agentId);
+          const sessionKey = (event as any).sessionKey || "unknown";
+
+          api.logger.debug(
+            `memory-lancedb-pro: auto-capture agent_end payload for agent ${agentId} (sessionKey=${sessionKey}, captureAssistant=${config.captureAssistant === true}, ${summarizeAgentEndMessages(event.messages)})`,
+          );
 
           // Extract text content from messages
           const texts: string[] = [];
@@ -784,14 +832,20 @@ const memoryLanceDBProPlugin = {
             }
           }
 
+          const minMessages = config.extractMinMessages ?? 2;
+          api.logger.debug(
+            `memory-lancedb-pro: auto-capture collected ${texts.length} text(s) for agent ${agentId} (minMessages=${minMessages}, smartExtraction=${smartExtractor ? "on" : "off"})`,
+          );
+
           // ----------------------------------------------------------------
           // Smart Extraction (Phase 1: LLM-powered 6-category extraction)
           // ----------------------------------------------------------------
           if (smartExtractor) {
-            const minMessages = config.extractMinMessages ?? 4;
             if (texts.length >= minMessages) {
+              api.logger.debug(
+                `memory-lancedb-pro: auto-capture running smart extraction for agent ${agentId} (${texts.length} >= ${minMessages})`,
+              );
               const conversationText = texts.join("\n");
-              const sessionKey = (event as any).sessionKey || "unknown";
               const stats = await smartExtractor.extractAndPersist(
                 conversationText, sessionKey,
                 { scope: defaultScope, scopeFilter: accessibleScopes },
@@ -800,18 +854,37 @@ const memoryLanceDBProPlugin = {
                 api.logger.info(
                   `memory-lancedb-pro: smart-extracted ${stats.created} created, ${stats.merged} merged, ${stats.skipped} skipped for agent ${agentId}`
                 );
+                return; // Smart extraction handled everything
               }
-              return; // Smart extraction handled everything
+
+              api.logger.info(
+                `memory-lancedb-pro: smart extraction produced no persisted memories for agent ${agentId}; falling back to regex capture`,
+              );
+            } else {
+              api.logger.debug(
+                `memory-lancedb-pro: auto-capture skipped smart extraction for agent ${agentId} (${texts.length} < ${minMessages})`,
+              );
             }
           }
+
+          api.logger.debug(
+            `memory-lancedb-pro: auto-capture running regex fallback for agent ${agentId}`,
+          );
 
           // ----------------------------------------------------------------
           // Fallback: regex-triggered capture (original logic)
           // ----------------------------------------------------------------
           const toCapture = texts.filter((text) => text && shouldCapture(text) && !isNoise(text));
           if (toCapture.length === 0) {
+            api.logger.info(
+              `memory-lancedb-pro: regex fallback found 0 capturable texts for agent ${agentId}`,
+            );
             return;
           }
+
+          api.logger.info(
+            `memory-lancedb-pro: regex fallback found ${toCapture.length} capturable text(s) for agent ${agentId}`,
+          );
 
           // Store each capturable piece (limit to 3 per conversation)
           let stored = 0;
@@ -1232,7 +1305,7 @@ function parsePluginConfig(value: unknown): PluginConfig {
     // Smart extraction config (Phase 1)
     smartExtraction: cfg.smartExtraction !== false, // Default ON
     llm: typeof cfg.llm === "object" && cfg.llm !== null ? cfg.llm as any : undefined,
-    extractMinMessages: parsePositiveInt(cfg.extractMinMessages) ?? 4,
+    extractMinMessages: parsePositiveInt(cfg.extractMinMessages) ?? 2,
     extractMaxChars: parsePositiveInt(cfg.extractMaxChars) ?? 8000,
     scopes: typeof cfg.scopes === "object" && cfg.scopes !== null ? cfg.scopes as any : undefined,
     enableManagementTools: cfg.enableManagementTools === true,

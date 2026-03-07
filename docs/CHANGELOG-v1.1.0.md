@@ -203,7 +203,7 @@ llm?: {
   model?: string;             // LLM 模型（默认 gpt-4o-mini）
   baseURL?: string;           // LLM API 端点
 };
-extractMinMessages?: number;  // 最少消息数才触发提取（默认 4）
+extractMinMessages?: number;  // 最少消息数才触发提取（默认 2）
 extractMaxChars?: number;     // 送入 LLM 的最大字符数（默认 8000）
 ```
 
@@ -278,7 +278,7 @@ openclaw memory-pro upgrade [--dry-run] [--batch-size N] [--no-llm] [--limit N] 
     "model": "gpt-4o-mini",
     "baseURL": "https://api.openai.com/v1"
   },
-  "extractMinMessages": 4,
+  "extractMinMessages": 2,
   "extractMaxChars": 8000
 }
 ```

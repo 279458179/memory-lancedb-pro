@@ -16,9 +16,126 @@
 
 ---
 
+## 从这里开始
+
+如果你是第一次在 OpenClaw 里接这个插件，建议按下面顺序：
+
+1. 安装 beta 版。
+2. 直接复制下面的推荐配置。
+3. 校验配置并重启 Gateway。
+4. 只有需要深入理解时，再继续看架构、迁移、蒸馏等高级章节。
+
+深入文档：
+
+- [OpenClaw 集成操作手册](docs/openclaw-integration-playbook.zh-CN.md)
+- [记忆架构分析](docs/memory_architecture_analysis.md)
+
+## OpenClaw 新用户最佳体验配置
+
+如果你的目标是“开箱就有比较好的自动记忆 + 自动召回体验”，推荐从这一组配置开始：
+
+- `autoCapture: true`
+- `autoRecall: true`
+- `smartExtraction: true`
+- `extractMinMessages: 2`
+- `sessionMemory.enabled: false`
+- `captureAssistant: false`
+
+原因：
+
+- `extractMinMessages: 2` 能让智能提取在常见两轮对话里更容易触发。
+- `autoRecall: true` 能立刻体现长期记忆的主要价值。
+- `sessionMemory.enabled: false` 可以避免一开始就让 session summary 污染检索结果。
+- `captureAssistant: false` 保持 auto-capture 更保守，先降低噪声。
+
+### 30 秒快速接入
+
+安装：
+
+```bash
+npm i memory-lancedb-pro@beta
+```
+
+推荐 OpenClaw 配置：
+
+```json
+{
+  "plugins": {
+    "slots": {
+      "memory": "memory-lancedb-pro"
+    },
+    "entries": {
+      "memory-lancedb-pro": {
+        "enabled": true,
+        "config": {
+          "embedding": {
+            "provider": "openai-compatible",
+            "apiKey": "${OPENAI_API_KEY}",
+            "model": "text-embedding-3-small"
+          },
+          "autoCapture": true,
+          "autoRecall": true,
+          "smartExtraction": true,
+          "extractMinMessages": 2,
+          "extractMaxChars": 8000,
+          "sessionMemory": {
+            "enabled": false
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+校验并重启：
+
+```bash
+openclaw config validate
+openclaw gateway restart
+openclaw logs --follow --plain | rg "memory-lancedb-pro"
+```
+
+你应该看到类似日志：
+
+- `memory-lancedb-pro: smart extraction enabled`
+- `memory-lancedb-pro@...: plugin registered`
+
+如果你发现模型太容易回显注入的 memory block，先只改这一项：
+
+```json
+{
+  "autoRecall": false
+}
+```
+
+## 这份 README 适合做什么
+
+这份 README 主要覆盖：
+
+- 安装
+- 推荐的 OpenClaw 配置
+- 配置项说明
+- 迁移 / 升级 / 回滚
+- CLI / tools / 故障排查
+
+如果你只想最快接入，到上面的快速接入就可以先停下来。
+
+## 为什么这套记忆体系在 OpenClaw 里更有价值
+
+这个插件能让 Agent 在正常聊天里逐步记住有用信息，而不是每次都靠你手动存记忆。
+
+- **普通聊天就能沉淀长期记忆**：它会从对话里提取比较稳定的偏好、事实、决定，不用你每次都手动调 `memory_store`。
+- **下一轮回复前能自动带回相关记忆**：开启 `autoRecall` 后，OpenClaw 会在回复前注入最相关的历史记忆，让 Agent 跨会话表现更连续。
+- **自动记忆和手动记忆用的是同一套库**：自动捕获、Agent tools、CLI 搜索、迁移、升级都共用一份 LanceDB，不会变成几套互相割裂的记忆系统。
+- **更符合 OpenClaw 原本的工作方式**：OpenClaw 已经会把完整会话存成 JSONL，这个插件更关注“提炼真正值得长期保存的信息”，而不是把整段聊天一股脑塞进长期记忆。
+- **不是演示级功能，而是一整套可运维方案**：备份、去重、Scope 隔离、生命周期排序、升级路径、排障工具都已经在同一体系里。
+
+如果你想看完整架构细节，可以继续看 [docs/memory_architecture_analysis.md](docs/memory_architecture_analysis.md)。
+
 ## 📺 视频教程
 
-> **观看完整教程 — 涵盖安装、配置，以及混合检索的底层原理。**
+> 完整演示：安装、配置，以及混合检索的底层原理。
 
 [![YouTube Video](https://img.shields.io/badge/YouTube-立即观看-red?style=for-the-badge&logo=youtube)](https://youtu.be/MtukF1C8epQ)
 🔗 **https://youtu.be/MtukF1C8epQ**
@@ -57,11 +174,9 @@ OpenClaw 内置的 `memory-lancedb` 插件仅提供基本的向量搜索。**mem
 
 ## 🧪 Beta：智能记忆 v1.1.0
 
-> **状态**：Beta 版 — 通过 npm `beta` dist-tag 发布，不影响 `latest` 稳定通道。
+> 状态：Beta 版 — 通过 npm `beta` dist-tag 发布，不影响 `latest` 稳定通道。
 
 `dev/smart-memory-v1.1.0` 分支为记忆写入和检索管线引入了三大增强：
-
-### 新功能
 
 | 功能 | 说明 |
 |------|------|
@@ -69,65 +184,10 @@ OpenClaw 内置的 `memory-lancedb` 插件仅提供基本的向量搜索。**mem
 | **生命周期评分** | Weibull 衰减模型集成到检索中 — 分数通过 `max(tierFloor, decayComposite)` 调整，高频访问和高重要性的记忆排名更靠前。 |
 | **分层管理** | 三层系统（Core → Working → Peripheral），根据访问频率、复合得分和重要性自动晋升/降级。 |
 
-### 安装 Beta 版
+Beta 反馈：
 
-```bash
-npm i memory-lancedb-pro@beta
-```
-
-或指定精确版本：
-
-```bash
-npm i memory-lancedb-pro@1.1.0-beta.1
-```
-
-### 配置
-
-智能提取**默认开启**。它复用你现有的 embedding API key 进行 LLM 调用（也可以单独配置 LLM 端点）：
-
-```json
-{
-  "plugins.entries.memory-lancedb-pro": {
-    "config": {
-      "smartExtraction": true,
-      "llm": {
-        "apiKey": "${OPENAI_API_KEY}",
-        "model": "gpt-4o-mini",
-        "baseURL": "https://api.openai.com/v1"
-      },
-      "extractMinMessages": 4,
-      "extractMaxChars": 8000
-    }
-  }
-}
-```
-
-| 配置项 | 默认值 | 说明 |
-|--------|--------|------|
-| `smartExtraction` | `true` | 启用/禁用 LLM 驱动提取 |
-| `llm.apiKey` | *(embedding apiKey)* | 提取 LLM 的 API key |
-| `llm.model` | `gpt-4o-mini` | 提取和去重使用的 LLM 模型 |
-| `llm.baseURL` | *(embedding baseURL)* | LLM API 的 Base URL |
-| `extractMinMessages` | `4` | 触发提取的最少对话消息数 |
-| `extractMaxChars` | `8000` | 处理提取的最大对话字符数 |
-
-### 新增文件
-
-| 文件 | 用途 |
-|------|------|
-| `src/smart-extractor.ts` | LLM 提取管线：对话 → 提取 → 去重 → 持久化 |
-| `src/extraction-prompts.ts` | 提取、去重和合并的提示词模板 |
-| `src/llm-client.ts` | OpenAI 兼容 LLM 客户端，含 JSON 解析 |
-| `src/memory-categories.ts` | 6 类别分类系统 + 合并策略 |
-| `src/decay-engine.ts` | Weibull 拉伸指数衰减模型 |
-| `src/tier-manager.ts` | 三层晋升/降级生命周期管理器 |
-
-### 反馈
-
-这是 beta 版本 — 欢迎在以下地方报告问题或分享反馈：
 - [GitHub Issues](https://github.com/win4r/memory-lancedb-pro/issues)
-
-回退到稳定版：`npm i memory-lancedb-pro@latest`
+- 回退到稳定版：`npm i memory-lancedb-pro@latest`
 
 ---
 
@@ -275,11 +335,13 @@ Legacy 回退路径：
 - **LLM 或无 LLM 模式**：LLM 生成高质量摘要，或简单截取首句（离线可用）
 - **启动自动检测**：插件启动时自动检测旧记忆并在日志提示运行升级命令
 
-### 不想在对话中“显示长期记忆”？
+### 如果注入的记忆被模型“显示出来”怎么办？
 
 有时模型会把注入到上下文中的 `<relevant-memories>` 区块“原样输出”到回复里，从而出现你看到的“周期性显示长期记忆”。
 
-**方案 A（推荐）：关闭自动召回 autoRecall**
+如果你采用的是前面的“最佳体验配置”，不要默认先关掉 `autoRecall`。只有当模型真的开始泄漏记忆注入内容时，再用下面这些缓解方案。
+
+**方案 A（最低风险兜底）：临时关闭 autoRecall**
 
 在插件配置里设置 `autoRecall: false`，然后重启 gateway：
 
@@ -298,7 +360,7 @@ Legacy 回退路径：
 }
 ```
 
-**方案 B：保留召回，但要求 Agent 不要泄漏**
+**方案 B（更适合保留召回效果）：保留召回，但要求 Agent 不要泄漏**
 
 在对应 Agent 的 system prompt 里加一句，例如：
 
@@ -334,7 +396,8 @@ openclaw config get plugins.entries.memory-lancedb-pro
 #### 路径 A：第一次用 OpenClaw，或第一次接入记忆插件
 
 1. 安装插件，并把 `plugins.slots.memory` 绑定到 `memory-lancedb-pro`
-2. 先从最简配置开始（`embedding` + 可选 `smartExtraction`）
+2. 先从上面的“OpenClaw 新用户最佳体验配置”开始
+   - 只有在排查安装问题或隔离检索故障时，才退回最简配置
 3. 执行：
 
 ```bash
@@ -550,7 +613,7 @@ openclaw config get plugins.slots.memory
   },
   "dbPath": "~/.openclaw/memory/lancedb-pro",
   "autoCapture": true,
-  "autoRecall": false,
+  "autoRecall": true,
   "retrieval": {
     "mode": "hybrid",
     "vectorWeight": 0.7,
@@ -592,7 +655,7 @@ openclaw config get plugins.slots.memory
     "model": "openai/gpt-oss-120b",
     "baseURL": "https://api.openai.com/v1"
   },
-  "extractMinMessages": 4,
+  "extractMinMessages": 2,
   "extractMaxChars": 8000
 }
 ```
@@ -600,6 +663,7 @@ openclaw config get plugins.slots.memory
 OpenClaw 默认行为补充：
 
 - `autoCapture`：默认开启
+- `autoRecall`：插件 schema 默认关闭，但对大多数第一次接入的 OpenClaw 用户，这份 README 建议在基础安装成功后显式开启
 - `embedding.chunking`：默认开启，且现在已经真正传递到 embedder 运行时
 - `sessionMemory.enabled`：默认关闭；如果你希望插件注册 `/new` 的 session-summary Hook，需要显式设置为 `true`
 
@@ -704,7 +768,7 @@ OpenClaw 默认行为补充：
 | `llm.apiKey` | string | *（默认复用 `embedding.apiKey`）* | LLM 提供商 API Key |
 | `llm.model` | string | `openai/gpt-oss-120b` | LLM 模型名称 |
 | `llm.baseURL` | string | *（默认复用 `embedding.baseURL`）* | LLM API 端点 |
-| `extractMinMessages` | number | `4` | 触发提取所需的最少消息数 |
+| `extractMinMessages` | number | `2` | 触发提取所需的最少消息数 |
 | `extractMaxChars` | number | `8000` | 发送给 LLM 提取的最大字符数 |
 
 <details>
@@ -737,7 +801,7 @@ OpenClaw 默认行为补充：
     "model": "openai/gpt-oss-120b",
     "baseURL": "https://api.openai.com/v1"
   },
-  "extractMinMessages": 4,
+  "extractMinMessages": 2,
   "extractMaxChars": 8000
 }
 ```
