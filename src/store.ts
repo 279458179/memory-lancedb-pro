@@ -817,22 +817,52 @@ export class MemoryStore {
       throw new Error(`Memory ${id} is outside accessible scopes`);
     }
 
-    // Build updated entry, preserving original timestamp
-    const updated: MemoryEntry = {
+    const original: MemoryEntry = {
       id: row.id as string,
-      text: updates.text ?? (row.text as string),
-      vector: updates.vector ?? Array.from(row.vector as Iterable<number>),
-      category: updates.category ?? (row.category as MemoryEntry["category"]),
+      text: row.text as string,
+      vector: Array.from(row.vector as Iterable<number>),
+      category: row.category as MemoryEntry["category"],
       scope: rowScope,
-      importance: updates.importance ?? Number(row.importance),
-      timestamp: Number(row.timestamp), // preserve original
-      metadata: updates.metadata ?? ((row.metadata as string) || "{}"),
+      importance: Number(row.importance),
+      timestamp: Number(row.timestamp),
+      metadata: (row.metadata as string) || "{}",
     };
 
-    // LanceDB doesn't support in-place update; delete + re-add
+    // Build updated entry, preserving original timestamp
+    const updated: MemoryEntry = {
+      ...original,
+      text: updates.text ?? original.text,
+      vector: updates.vector ?? original.vector,
+      category: updates.category ?? original.category,
+      scope: rowScope,
+      importance: updates.importance ?? original.importance,
+      timestamp: original.timestamp, // preserve original
+      metadata: updates.metadata ?? original.metadata,
+    };
+
+    // LanceDB doesn't support in-place update; delete + re-add.
+    // If the add fails after delete, attempt best-effort rollback to avoid
+    // silently losing the original record.
     const resolvedId = escapeSqlLiteral(row.id as string);
     await this.table!.delete(`id = '${resolvedId}'`);
-    await this.table!.add([updated]);
+    try {
+      await this.table!.add([updated]);
+    } catch (addError) {
+      try {
+        await this.table!.add([original]);
+      } catch (rollbackError) {
+        throw new Error(
+          `Failed to update memory ${id}: write failed after delete, and rollback also failed. ` +
+          `Write error: ${addError instanceof Error ? addError.message : String(addError)}. ` +
+          `Rollback error: ${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`,
+        );
+      }
+
+      throw new Error(
+        `Failed to update memory ${id}: write failed after delete, original record restored. ` +
+        `Write error: ${addError instanceof Error ? addError.message : String(addError)}`,
+      );
+    }
 
     return updated;
   }
