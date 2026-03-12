@@ -531,11 +531,8 @@ export class MemoryRetriever {
       // Use the result with more complete data (prefer vector result if both exist)
       const baseResult = vectorResult || bm25Result!;
 
-      // Use vector similarity as the base score.
-      // BM25 hit acts as a bonus (keyword match confirms relevance).
       const vectorScore = vectorResult ? vectorResult.score : 0;
       const bm25Score = bm25Result ? bm25Result.score : 0;
-      const bm25Hit = bm25Result ? 1 : 0;
 
       // Weighted fusion: vectorWeight/bm25Weight directly control score blending.
       // BM25 high-score floor (>= 0.75) preserves exact keyword matches
